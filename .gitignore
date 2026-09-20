@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+reviewdiff-tests-*.txt
+reviewdiff-auto-diagnostic.zip.txt
+main-diff-*.tex
+main-diff-*.pdf
+main-diff-*.audit.txt
+old-new.binary.diff

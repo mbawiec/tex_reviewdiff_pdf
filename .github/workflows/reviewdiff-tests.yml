@@ -1,0 +1,11 @@
+name: reviewdiff quick tests
+on: [push, pull_request]
+jobs:
+  quick-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locked script and rule regressions
+        run: |
+          python3 tests/check_locked_script.py
+          python3 tests/test_active_blank_boundary.py

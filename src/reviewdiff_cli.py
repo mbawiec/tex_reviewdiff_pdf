@@ -15,7 +15,7 @@ VERSION = '1.0.0'
 DEFAULT_OLD = '19bdc838918c9e89a4d4451784dd078e0a0671e1'
 DEFAULT_NEW = '93dbca00a6d4e6a494f1eb923223c0bd90ddf765'
 DEFAULT_MAIN = 'main.tex'
-LOCKED_SHA256 = 'a56c8a6112138f0069d43aee894cb3a2b1bddf8cf87ac38ec5ebf44f50674bee'
+LOCKED_SHA256 = '36f3018e3c7d333dbb6152f112554d1fb101d8fdd5e594af12c28c6a92ce8685'
 TOOLS = ['git','tar','pdflatex','bibtex','latexpand','latexdiff','latexrevise','python3','pdfinfo','pdftotext','shasum','cmp','grep','awk','sed','zip','open','pbcopy']
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]

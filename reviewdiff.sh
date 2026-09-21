@@ -161,6 +161,52 @@ text, fixed_join_boundaries = join_rx.subn(
 # Save the projection source before applying presentation-only repairs.
 projection_source_path.write_text(text)
 
+
+# STRUCTURAL_BOOKTABS_WRAPPER_VERSION=1
+# Presentation-only normalization. Commands implemented through \noalign must
+# remain direct alignment material and therefore cannot be enclosed by active
+# latexdiff FL boundary commands. The untouched projection source preserves
+# exact accept/decline semantics.
+_booktabs_command = (
+    r'(?:'
+    r'\\(?:toprule|midrule|bottomrule)'
+    r'|\\cmidrule(?:\([^)]*\))?\{[^}]+\}'
+    r'|\\specialrule\{[^}]+\}\{[^}]+\}\{[^}]+\}'
+    r')'
+)
+structural_booktabs_wrapper_rx = re.compile(
+    r'\\DIFaddbeginFL\s*'
+    r'(?P<command>' + _booktabs_command + r')'
+    r'\s*\\DIFaddendFL'
+)
+
+
+def unwrap_structural_booktabs(source):
+    return structural_booktabs_wrapper_rx.subn(
+        lambda match: match.group('command') + '\n',
+        source,
+    )
+
+
+structural_booktabs_wrapper_candidates = len(
+    structural_booktabs_wrapper_rx.findall(text)
+)
+text, structural_booktabs_wrappers_fixed = unwrap_structural_booktabs(text)
+structural_booktabs_wrappers_remaining = len(
+    structural_booktabs_wrapper_rx.findall(text)
+)
+_structural_booktabs_second, structural_booktabs_second_fixed = (
+    unwrap_structural_booktabs(text)
+)
+structural_booktabs_wrapper_idempotence = (
+    'PASS'
+    if (
+        structural_booktabs_second_fixed == 0
+        and _structural_booktabs_second == text
+    )
+    else 'FAIL'
+)
+
 # SOURCE_AWARE_WHOLE_TABLE_RECONSTRUCTION_VERSION=1
 # Detect whole-table replacements produced by latexdiff, then rebuild one visible
 # table from OLD and NEW. Structural table tokens remain outside DIF arguments.
@@ -226,17 +272,70 @@ def peel_structure(cell):
         prefix += m.group(0) + '\n'; cell = cell[m.end():]
     return prefix, cell
 
+# LOCAL_CELL_DIFF_VERSION=1
+# Presentation-only reconstruction for topology-compatible whole-table changes.
+# Equal token runs remain black; only true deletions/additions are marked.
+_cell_token_rx = re.compile(
+    r'(\\mbox\{5\}|\\ref\{thm:anonymity\}|\\ref\{thm:isolated-transmissions\}'
+    r'|\$\^\*\$|\$\^\{\*\*\}\$|\$\^\{\\ast\}\$|\$\^\{\\ast\\ast\}\$'
+    r'|\$[^$]*\$'
+    r'|\\[A-Za-z@]+(?:\s*\[[^]]*\])?(?:\s*\{[^{}]*\})*'
+    r'|\\.'
+    r'|[A-Za-z0-9]+(?:[-–—][A-Za-z0-9]+)*'
+    r'|\s+'
+    r'|.)', re.S)
+
+def _cell_tokens(value):
+    return _cell_token_rx.findall(value)
+
+# VISIBLE_CELL_EQUIVALENCE_VERSION=3
+# Comparison-only canonicalization. The emitted equal run always uses NEW
+# syntax, while accept/decline projections continue to use the untouched
+# projection source and therefore reconstruct exact NEW/OLD inputs.
+def _visible_cell_token_key(token):
+    compact = re.sub(r'\s+', '', token)
+    # The old flattened reference and the new symbolic reference both render 5.
+    if compact in (r'\mbox{5}', r'\ref{thm:anonymity}', r'\ref{thm:isolated-transmissions}'):
+        return '<VISIBLE_THEOREM_5>'
+    # TeX source spelling only: \* and \ast render the same star glyph.
+    if compact in (r'$^*$', r'$^\*$', r'$^{\*}$', r'$^\ast$', r'$^{\ast}$'):
+        return '<VISIBLE_STAR_1>'
+    if compact in (r'$^{**}$', r'$^{\*\*}$', r'$^{\ast\ast}$'):
+        return '<VISIBLE_STAR_2>'
+    if compact in (r'$^\dagger$', r'$^{\dagger}$'):
+        return '<VISIBLE_DAGGER_1>'
+    return token
+
+def _marked_cell_payload(old_value, new_value):
+    old_tokens, new_tokens = _cell_tokens(old_value), _cell_tokens(new_value)
+    old_keys = [_visible_cell_token_key(t) for t in old_tokens]
+    new_keys = [_visible_cell_token_key(t) for t in new_tokens]
+    matcher = difflib.SequenceMatcher(a=old_keys, b=new_keys, autojunk=False)
+    pieces = []
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        old_part = ''.join(old_tokens[a0:a1])
+        new_part = ''.join(new_tokens[b0:b1])
+        if tag == 'equal': pieces.append(new_part)
+        elif tag == 'delete':
+            if old_part: pieces.append(r'\DIFdelFL{' + old_part + '}')
+        elif tag == 'insert':
+            if new_part: pieces.append(r'\DIFaddFL{' + new_part + '}')
+        else:
+            if old_part: pieces.append(r'\DIFdelFL{' + old_part + '}')
+            if old_part and new_part: pieces.append(' ')
+            if new_part: pieces.append(r'\DIFaddFL{' + new_part + '}')
+    return ''.join(pieces)
+
 def mark_changed_cell(old_cell, new_cell):
     op, old_core = peel_structure(old_cell)
     np, new_core = peel_structure(new_cell)
     structure = np or op
     if norm(old_core) == norm(new_core): return structure + new_core
-    # Keep multicolumn structural syntax outside markers when topology matches.
     mo = re.fullmatch(r'\s*\\multicolumn\{([^}]*)\}\{([^}]*)\}\{(.*)\}\s*', old_core, re.S)
     mn = re.fullmatch(r'\s*\\multicolumn\{([^}]*)\}\{([^}]*)\}\{(.*)\}\s*', new_core, re.S)
     if mo and mn and mo.group(1,2) == mn.group(1,2):
-        return structure + r'\multicolumn{' + mn.group(1) + '}{' + mn.group(2) + '}{' + r'\DIFdelFL{' + mo.group(3) + '} ' + r'\DIFaddFL{' + mn.group(3) + '}}'
-    return structure + r'\DIFdelFL{' + old_core.strip() + '} ' + r'\DIFaddFL{' + new_core.strip() + '}'
+        return structure + r'\multicolumn{' + mn.group(1) + '}{' + mn.group(2) + '}{' + _marked_cell_payload(mo.group(3), mn.group(3)) + '}'
+    return structure + _marked_cell_payload(old_core.strip(), new_core.strip())
 
 def merge_tabular(old_block, new_block):
     po, pn = tabular_parts(old_block), tabular_parts(new_block)
@@ -2073,6 +2172,7 @@ second = (
     second_hskip
     + second_row
     + second_join
+    + structural_booktabs_second_fixed
     + second_deleted
     + second_image
     + second_scaled_ll
@@ -2083,6 +2183,10 @@ metrics_path.write_text('\n'.join([
     f'FIXED_HSKIP={fixed_hskip}',
     f'FIXED_ROW_BOUNDARIES={fixed_row_boundaries}',
     f'FIXED_JOIN_BOUNDARIES={fixed_join_boundaries}',
+    f'STRUCTURAL_BOOKTABS_WRAPPER_CANDIDATES={structural_booktabs_wrapper_candidates}',
+    f'STRUCTURAL_BOOKTABS_WRAPPERS_FIXED={structural_booktabs_wrappers_fixed}',
+    f'STRUCTURAL_BOOKTABS_WRAPPERS_REMAINING={structural_booktabs_wrappers_remaining}',
+    f'STRUCTURAL_BOOKTABS_WRAPPER_IDEMPOTENCE={structural_booktabs_wrapper_idempotence}',
     f'RAW_ADDED_GRAPHICS_FRAMES={raw_added_graphics_frames}',
     f'FIXED_ADDED_GRAPHICS_FRAMES={fixed_added_graphics_frames}',
     f'RAW_COMMENTED_DELETED_ROW_BOUNDARIES={raw_commented_deleted_row_boundaries}',
